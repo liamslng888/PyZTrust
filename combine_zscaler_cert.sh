@@ -10,12 +10,6 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
-# Enforce interactive execution early as per design requirements
-if [[ ! -t 0 ]]; then
-    echo "✘ Error: This script modifies active shell profiles and must be run interactively."
-    exit 1
-fi
-
 # ---------------------------------------------------------------------------
 # combine_zscaler_cert.sh
 #
@@ -103,21 +97,30 @@ SOURCE_LINE="source \"$CORP_SSL_ENV\""
     exit 1
 }
 
+INTERACTIVE=false
+if [[ -t 0 ]]; then
+    INTERACTIVE=true
+fi
+
 if [[ -d "$CERT_DIR" ]]; then
     echo "⚠ The directory $CERT_DIR already exists."
     echo "  Re-generating the certificates will briefly disrupt active Python sessions."
     echo "" 
 
-    set +e
-    read -r -t 60 -p "👉 Is it OK to delete the existing directory...? [y/n]: " confirm_delete
-    read_status=$?
-    set -e
+    confirm_delete="n"
+    if [[ "$INTERACTIVE" == "true" ]]; then
+        set +e
+        read -r -t 60 -p "👉 Is it OK to delete the existing directory...? [y/n]: " confirm_delete
+        read_status=$?
+        set -e
 
-    if (( read_status > 128 )); then
-        echo -e "\n✘ Confirmation timed out. Aborting to protect current configuration."
-        exit 1
+        if (( read_status > 128 )); then
+            echo -e "\n✘ Confirmation timed out. Aborting to protect current configuration."
+            exit 1
+        fi
+        # If the user pressed Enter, assign your intended default
+        [[ -z "$confirm_delete" ]] && confirm_delete="n"
     fi
-    [[ -z "$confirm_delete" ]] && confirm_delete="n"
 
     case "$confirm_delete" in
         [Yy])
@@ -167,6 +170,13 @@ done
 
 # ---------------------------------------------------------------------------
 # Phase 1: Discover a usable Python installation and CA bundle.
+#
+# Preference order:
+#   1. ssl.get_default_verify_paths().openssl_cafile
+#   2. certifi.where()
+#
+# Once a valid CA bundle is found, append the Zscaler certificate,
+# validate the resulting bundle, and generate the shell environment file.
 # ---------------------------------------------------------------------------
 for version in "${python_candidates[@]}"; do
     cmd="python$version"
@@ -193,6 +203,9 @@ for version in "${python_candidates[@]}"; do
             "$cmd" -c 'import ssl; p=ssl.get_default_verify_paths().openssl_cafile; print(p if p else "")'
     ) || ssl_cafile=""
 
+    # Resolve symlinks so the script works consistently with Homebrew,
+    # python.org, and other Python distributions that expose CA bundles
+    # through symbolic links.
     if [[ -f "$ssl_cafile" ]]; then
         REALPATH_ERR=$(mktemp "$CERT_DIR/_zscaler_realpath_err.XXXXXX")
         TMP_FILES+=("$REALPATH_ERR")
@@ -228,16 +241,22 @@ except Exception as e:
     else
         certifi_path=$("$cmd" -c "import certifi; print(certifi.where())" 2>/dev/null || true)
         if [[ -z "$certifi_path" ]]; then
-            set +e
-            read -r -t 60 -p "   certifi is not installed for $cmd. Install it now? [y/n]: " install_certifi
-            read_status=$?
-            set -e
+            install_certifi="n"
+            if [[ "$INTERACTIVE" == "true" ]]; then
+                set +e
+                read -r -t 60 -p "   certifi is not installed for $cmd. Install it now? [y/n]: " install_certifi
+                read_status=$?
+                set -e
 
-            if (( read_status > 128 )); then
-                echo -e "\n✘ Confirmation timed out. Aborting script to safeguard state."
-                exit 1
+                # Detect timeout (read returns >128 on timeout in bash)
+                if (( read_status > 128 )); then
+                    echo -e "\n✘ Confirmation timed out. Aborting script to safeguard state."
+                    exit 1
+                fi
+
+                # If user just pressed Enter, apply explicit default
+                [[ -z "$install_certifi" ]] && install_certifi="n"
             fi
-            [[ -z "$install_certifi" ]] && install_certifi="n"
 
             case "$install_certifi" in
                 [Yy])
@@ -259,8 +278,16 @@ except Exception as e:
                         continue
                     fi
                     ;;
-                *)
+
+                [Nn])
                     echo "   Skipping certifi install for $cmd — moving to next Python version"
+                    skipped_versions+=("$cmd")
+                    echo ""
+                    continue
+                    ;;
+
+                *)
+                    echo "   Invalid input — skipping certifi install for $cmd"
                     skipped_versions+=("$cmd")
                     echo ""
                     continue
@@ -285,29 +312,46 @@ except Exception as e:
         fi
     fi
 
-    set +e
-    read -r -t 60 -p "   Use this Python installation...? [y/n]: " use_this_python
-    read_status=$?
-    set -e
+    use_this_python="n"
 
-    if (( read_status > 128 )); then
-        echo -e "\n   ✘ Confirmation timed out. Aborting script to safeguard state."
-        exit 1
+    if [[ "$INTERACTIVE" == "true" ]]; then
+        set +e
+        read -r -t 60 -p "   Use this Python installation...? [y/n]: " use_this_python
+        read_status=$?
+        set -e
+
+        # Timeout detection
+        if (( read_status > 128 )); then
+            echo -e "\n   ✘ Confirmation timed out. Aborting script to safeguard state."
+            exit 1
+        fi
+
+        # Enter key default
+        [[ -z "$use_this_python" ]] && use_this_python="n"
     fi
-    [[ -z "$use_this_python" ]] && use_this_python="n"
 
     case "$use_this_python" in
         [Yy])
             :  # proceed
             ;;
-        *)
+
+        [Nn])
             echo "   Skipping $cmd — moving to next Python version"
+            skipped_versions+=("$cmd")
+            echo ""
+            continue
+            ;;
+
+        *)
+            echo "   Invalid input — skipping $cmd"
             skipped_versions+=("$cmd")
             echo ""
             continue
             ;;
     esac
 
+    # Basic sanity check that both inputs appear to be PEM certificate bundles
+    # before attempting the merge.
     if ! grep -q "^-----BEGIN CERTIFICATE-----" "$cert_local"; then
         echo "✘ CA bundle does not appear to be valid PEM: $cert_local"
         exit 1
@@ -331,10 +375,7 @@ except Exception as e:
     [[ "$zscaler_cert_count" =~ ^[0-9]+$ ]] || { echo "✘ Could not read cert count from Zscaler cert: '$zscaler_cert_count'"; exit 1; }
 
     if (( zscaler_cert_count != 1 )); then
-        echo "✘ Expected exactly 1 Zscaler certificate, found $zscaler_cert_count."
-        echo "  This usually happens if you have duplicate or expired Zscaler certificates"
-        echo "  inside your macOS Keychain. Please open Keychain Access, remove any"
-        echo "  duplicate legacy 'Zscaler Root CA' entries, and try again."
+        echo "✘ Expected exactly 1 Zscaler certificate, found $zscaler_cert_count — aborting."
         exit 1
     fi
 
@@ -348,6 +389,8 @@ except Exception as e:
         exit 1
     fi
 
+    # Build the merged bundle in a temporary file and atomically replace
+    # the target bundle after validation succeeds.
     COMBINED_TMP=$(mktemp "$CERT_DIR/.combined-ca.tmp.XXXXXX")
     TMP_FILES+=("$COMBINED_TMP")
 
@@ -380,6 +423,9 @@ except Exception as e:
     fi
     prune_tmp_file "$GREP_ERR_BUF"
 
+    # Confirm that the merged bundle contains all source certificates plus
+    # the exported Zscaler certificate. This helps detect truncation or
+    # incomplete writes.
     expected_total=$(( source_cert_count + 1 ))
     if (( combined_cert_count != expected_total )); then
         echo "✘ Post-merge validation failed: expected exactly $expected_total certificates, found $combined_cert_count"
@@ -387,6 +433,8 @@ except Exception as e:
     fi
     echo "   ✔ Post-merge validation passed ($source_cert_count source + 1 Zscaler = $combined_cert_count certificates)"
 
+    # Generate a shell snippet that exports the combined certificate bundle
+    # for Python, requests, and pip.
     ENV_TMP=$(mktemp "$CERT_DIR/.corp_ssl_env.tmp.XXXXXX")
     TMP_FILES+=("$ENV_TMP")
     {
@@ -416,6 +464,10 @@ done
 
 # ---------------------------------------------------------------------------
 # Phase 2: Update shell startup files.
+#
+# Existing corp_ssl_env.sh source lines are removed before the current
+# source line is appended. Each file is backed up before modification,
+# allowing rollback if any update fails.
 # ---------------------------------------------------------------------------
 if [[ -n "$selected_python_env" ]]; then
     rc_update_failed="false"
@@ -423,44 +475,37 @@ if [[ -n "$selected_python_env" ]]; then
     UPDATED_RC_MODES=()
 
     for RC_FILE in "${RC_FILES[@]}"; do
-        REAL_DEST=$("$selected_python_env" -c "
-        import os, sys
-        try:
-            print(os.path.realpath(sys.argv[1]))
-        except Exception:
-            print(sys.argv[1])
-        " "$RC_FILE" 2>/dev/null)
-        
-        [[ -z "$REAL_DEST" ]] && REAL_DEST="$RC_FILE"
-
-        rc_dir=$(dirname "$REAL_DEST")
-        rc_base=$(basename "$REAL_DEST")
-        
+        rc_dir=$(dirname "$RC_FILE")
+        rc_base=$(basename "$RC_FILE")
         RC_BACKUP=$(mktemp "$rc_dir/${rc_base}.zscaler_bak.XXXXXX")
         RC_TMP=$(mktemp "$CERT_DIR/.rc_update.XXXXXX")
         TMP_FILES+=("$RC_TMP")
 
-        original_mode=$(stat -f "%04Lp" "$REAL_DEST" 2>/dev/null || echo "0644")
+        original_mode=$(stat -f "%04Lp" "$RC_FILE" 2>/dev/null || echo "0644")
 
-        if ! cp "$REAL_DEST" "$RC_BACKUP"; then
-            echo "   ✘ Could not back up $REAL_DEST — skipping."
+        if ! cp "$RC_FILE" "$RC_BACKUP"; then
+            echo "   ✘ Could not back up $RC_FILE — skipping to avoid data loss."
+            echo "     Add this line manually:  $SOURCE_LINE"
             rm -f "$RC_BACKUP"
             prune_tmp_file "$RC_TMP"
             rc_update_failed="true"
             break
         fi
+
         TMP_FILES+=("$RC_BACKUP")
+
         chmod "$original_mode" "$RC_BACKUP" 2>/dev/null || true
 
         set +e
-        grep -Ev '\.corp_ssl_env\.sh' "$REAL_DEST" > "$RC_TMP"
+        grep -Ev '\.corp_ssl_env\.sh' "$RC_FILE" > "$RC_TMP"
         grep_exit=$?
         set -e
         if (( grep_exit > 1 )); then
             echo "   ✘ grep failed reading $RC_FILE (exit $grep_exit) — restoring backup."
-            if cat "$RC_BACKUP" > "$REAL_DEST"; then
-                prune_tmp_file "$RC_BACKUP"
-                chmod "$original_mode" "$REAL_DEST" 2>/dev/null || true
+            if mv "$RC_BACKUP" "$RC_FILE"; then
+                prune_tmp_file_record_only "$RC_BACKUP"
+                chmod "$original_mode" "$RC_FILE" 2>/dev/null || true
+                echo "   ✔ Backup restored successfully: $RC_FILE"
             else
                 echo "   ✘ CRITICAL: Could not restore $RC_FILE from backup ($RC_BACKUP)."
                 exit 1
@@ -488,19 +533,29 @@ if [[ -n "$selected_python_env" ]]; then
             break
         }
 
-        if ! cat "$RC_TMP" > "$REAL_DEST"; then
-            echo "   ✘ Could not update $REAL_DEST — triggering rollback."
+        if ! mv "$RC_TMP" "$RC_FILE"; then
+            echo "   ✘ Could not update $RC_FILE — attempting to restore backup."
+            if mv "$RC_BACKUP" "$RC_FILE"; then
+                prune_tmp_file_record_only "$RC_BACKUP"
+                chmod "$original_mode" "$RC_FILE" 2>/dev/null || true
+                echo "   ✔ Backup restored successfully: $RC_FILE"
+            else
+                echo "   ✘ CRITICAL: Could not restore $RC_FILE from backup ($RC_BACKUP)."
+                exit 1
+            fi
             rc_update_failed="true"
             break
         else
-            echo "   Source line written to $RC_FILE (true path: $REAL_DEST)"
-            UPDATED_RC_FILES+=("$REAL_DEST")
+            echo "   Source line written to $RC_FILE (backup at $RC_BACKUP)"
+            UPDATED_RC_FILES+=("$RC_FILE")
             UPDATED_RC_MODES+=("$original_mode")
             UPDATED_RC_BACKUPS+=("$RC_BACKUP")
             prune_tmp_file "$RC_TMP"
         fi
     done
 
+    # If any shell profile update fails, restore all previously modified
+    # profile files from their backups to keep configuration consistent.
     if [[ "$rc_update_failed" == "true" ]]; then
         echo -e "\n⚠ Triage: Shell profile updates failed. Initiating global rollback..."
         for i in "${!UPDATED_RC_FILES[@]}"; do
@@ -513,8 +568,8 @@ if [[ -n "$selected_python_env" ]]; then
                 continue
             fi
 
-            if cat "$B" > "$F"; then
-                prune_tmp_file "$B"
+            if mv "$B" "$F"; then
+                prune_tmp_file_record_only "$B"
                 chmod "$M" "$F" 2>/dev/null || true
                 echo "   ✔ Reverted changes and restored permissions to $F ($M)"
             else
@@ -529,6 +584,9 @@ echo ""
 
 # ---------------------------------------------------------------------------
 # Final status reporting and backup cleanup.
+#
+# At this point all modifications have succeeded. Temporary backups that
+# are no longer needed are removed before presenting next-step guidance.
 # ---------------------------------------------------------------------------
 if [[ -n "$selected_python_env" ]]; then
     echo "✔ Zscaler certificate has been combined with the Python CA bundle via $selected_python_env."
@@ -543,7 +601,7 @@ if [[ -n "$selected_python_env" ]]; then
         echo ""
         echo "  The combined certificate bundle was created, but nothing will load it automatically."
         echo "  Add this line to whichever shell startup file you use:"
-        echo "     $SOURCE_LINE"
+        echo "    $SOURCE_LINE"
     fi
 
     if [[ ${#skipped_versions[@]} -gt 0 ]]; then
@@ -553,16 +611,16 @@ if [[ -n "$selected_python_env" ]]; then
     echo -e "\n  No changes were made to your Fish config. If you use Fish:"
     echo "  Add the following to ~/.config/fish/config.fish manually:"
     echo ""
-    echo "     set -x SSL_CERT_FILE \"$COMBINED_CERT\""
-    echo "     set -x REQUESTS_CA_BUNDLE \"$COMBINED_CERT\""
-    echo "     set -x PIP_CERT \"$COMBINED_CERT\""
+    echo "    set -x SSL_CERT_FILE \"$COMBINED_CERT\""
+    echo "    set -x REQUESTS_CA_BUNDLE \"$COMBINED_CERT\""
+    echo "    set -x PIP_CERT \"$COMBINED_CERT\""
     echo ""
     echo "  Restart your terminal, or run:"
-    echo "     source \"$CORP_SSL_ENV\""
+    echo "    source \"$CORP_SSL_ENV\""
     echo ""
     echo "  Run these commands to completely revert changes made by this script:"
     for RC_FILE in "${RC_FILES[@]}"; do
-        echo "     perl -i -ne 'print unless /corp_cert\/\.corp_ssl_env\.sh/' \"$RC_FILE\""
+        echo "    perl -i -ne 'print unless /corp_cert\/\.corp_ssl_env\.sh/' \"$RC_FILE\""
     done
     echo ""
     exit 0
