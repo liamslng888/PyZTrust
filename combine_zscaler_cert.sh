@@ -533,7 +533,7 @@ if [[ -n "$selected_python_env" ]]; then
             break
         }
 
-        Determine the actual file path using Python (which is guaranteed to be available by Phase 2)
+        # Determine the actual file path using Python (which is guaranteed to be available by Phase 2)
         REAL_DEST=$("$selected_python_env" -c "
         import os, sys
         try:
