@@ -34,8 +34,13 @@ fi
 # shared path and permanently deny this script to other users.
 LOCK_DIR="${TMPDIR:-/tmp}"
 LOCK_DIR="${LOCK_DIR%/}/combine_zscaler_cert.$(id -u)"
-if ! mkdir -p -m 700 "$LOCK_DIR"; then
+if ! mkdir -p "$LOCK_DIR"; then
     echo "✘ Failed to create lock directory: $LOCK_DIR"
+    exit 1
+fi
+
+if ! chmod 700 "$LOCK_DIR"; then
+    echo "✘ Failed to secure lock directory: $LOCK_DIR"
     exit 1
 fi
 LOCK_FILE="$LOCK_DIR/lock"
@@ -48,7 +53,6 @@ fi
 # between lock acquisition and trap registration, or a kill in that window
 # would leave a stale lock behind forever.
 TMP_FILES=()
-rc_update_failed="false"
 UPDATED_RC_BACKUPS=()
 CERT_FILE_NEEDS_CLEANUP="false"
 EXIT_CODE=0
@@ -116,8 +120,8 @@ if [[ -d "$CERT_DIR" ]]; then
     read_status=$?
     set -e
     
-    if (( read_status == 1 )); then
-        echo -e "\n✘ Confirmation timed out. Aborting."
+    if (( read_status != 0 )); then
+        echo -e "\n✘ Input failed. Aborting."
         exit 1
     fi
     
@@ -127,6 +131,10 @@ if [[ -d "$CERT_DIR" ]]; then
         [Yy])
             echo "Proceeding with directory recreation..."
             echo ""
+            if [[ -L "$CERT_DIR" ]]; then
+                echo "✘ $CERT_DIR is a symbolic link. Aborting."
+                exit 1
+            fi
             rm -rf "$CERT_DIR"
             ;;
         *)
@@ -247,8 +255,8 @@ except Exception as e:
             read_status=$?
             set -e
             
-            if (( read_status == 1 )); then
-                echo -e "\n✘ Confirmation timed out. Aborting."
+            if (( read_status != 0 )); then
+                echo -e "\n✘ Input failed. Aborting."
                 exit 1
             fi
             
@@ -313,8 +321,8 @@ except Exception as e:
     read_status=$?
     set -e
     
-    if (( read_status == 1 )); then
-        echo -e "\n✘ Confirmation timed out. Aborting."
+    if (( read_status != 0 )); then
+        echo -e "\n✘ Input failed. Aborting."
         exit 1
     fi
     
