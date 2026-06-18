@@ -369,8 +369,8 @@ except Exception as e:
         exit 1
     fi
 
-    source_cert_count=$(grep -c "^-----BEGIN CERTIFICATE-----$" "$cert_local" || true)
-    zscaler_cert_count=$(grep -c "^-----BEGIN CERTIFICATE-----$" "$ZSCALER_CERT" || true)
+    source_cert_count=$(grep -c "^-----BEGIN CERTIFICATE-----" "$cert_local" || true)
+    zscaler_cert_count=$(grep -c "^-----BEGIN CERTIFICATE-----" "$ZSCALER_CERT" || true)
     [[ "$source_cert_count"  =~ ^[0-9]+$ ]] || { echo "✘ Could not read cert count from CA bundle: '$source_cert_count'";  exit 1; }
     [[ "$zscaler_cert_count" =~ ^[0-9]+$ ]] || { echo "✘ Could not read cert count from Zscaler cert: '$zscaler_cert_count'"; exit 1; }
 
@@ -414,7 +414,7 @@ except Exception as e:
 
     GREP_ERR_BUF=$(mktemp "$CERT_DIR/_zscaler_grep_err.XXXXXX")
     TMP_FILES+=("$GREP_ERR_BUF")
-    combined_cert_count=$(grep -c "^-----BEGIN CERTIFICATE-----$" "$COMBINED_CERT" 2>"$GREP_ERR_BUF" || true)
+    combined_cert_count=$(grep -c "^-----BEGIN CERTIFICATE-----" "$COMBINED_CERT" 2>"$GREP_ERR_BUF" || true)
 
     if [[ ! "$combined_cert_count" =~ ^[0-9]+$ ]]; then
         echo "✘ Could not read cert count from combined bundle."
