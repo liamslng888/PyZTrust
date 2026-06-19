@@ -17,7 +17,7 @@ if [[ ! -t 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# combine_zscaler_cert.sh
+# PyZTrust.sh
 #
 # Exports the corporate Zscaler root certificate from the macOS keychain,
 # merges it with a selected Python CA bundle, and configures shell
