@@ -1,4 +1,4 @@
-# combine_zscaler_cert.sh
+# PyZTrust.sh
 
 A macOS shell script that merges your corporate Zscaler root certificate with your Python CA bundle, so that Python tools (`pip`, `requests`, etc.) can verify HTTPS connections without SSL errors when traffic is being intercepted by Zscaler.
 
@@ -26,8 +26,8 @@ The script is interactive: it will ask for confirmation before deleting any pre-
 ## Usage
 
 ```bash
-chmod +x combine_zscaler_cert.sh
-./combine_zscaler_cert.sh
+chmod +x PyZTrust.sh
+./PyZTrust.sh
 ```
 
 Run it from a normal Terminal window (not piped from another process), since it needs to prompt you for input. Walk through the prompts:
