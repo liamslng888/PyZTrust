@@ -14,6 +14,11 @@ This script fixes that by:
 4. Writing a small shell snippet (`~/corp_cert/.corp_ssl_env.sh`) that exports `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, and `PIP_CERT` to point at the merged bundle.
 5. Adding a line to your shell startup file(s) (`~/.zshrc` and/or `~/.bash_profile`) that sources this snippet automatically, so it's in effect every time you open a terminal.
 
+1. Exports the **Zscaler Root CA** certificate from your macOS keychain
+2. Locates all installed Python versions on your machine (including their associated CA bundles). You will be asked to confirm which version will serve as the master export for the next step (note the CA bundle will vary, depending on if python was installed via homebrew [ssl module] or manually from python.org [certifi module])
+3. Merges the Zscaler certificate (from step-1) into the nominated CA bundle (from step-2).
+4. In your shell startup file(s) (~/.zshrc and/or ~/.bash_profile), points well-known environment variables (SSL_CERT_FILE + REQUESTS_CA_BUNDLE + PIP_CERT) at the merged bundle from step-3.
+
 The script is interactive: it will ask for confirmation before deleting any pre-existing setup, before installing `certifi`, and before using a given Python installation. Every shell profile it touches is backed up first, and any failure during the shell-profile update triggers an automatic rollback (see [Rollback](#rollback) below).
 
 ## Requirements
@@ -45,7 +50,8 @@ Each prompt has a 60-second timeout. If you don't respond in time, the script ab
 Restart your terminal, or run:
 
 ```bash
-source ~/corp_cert/.corp_ssl_env.sh
+source ~/.zshrc
+source ~/.bash_profile
 ```
 
 to pick up the new environment variables in your current session.
@@ -67,9 +73,9 @@ echo 'source "$HOME/corp_cert/.corp_ssl_env.sh"' >> ~/.zshrc
 The script does not modify Fish's configuration, since Fish doesn't use the same `export VAR=value` syntax as `zsh`/`bash`. It will print the equivalent commands at the end of a successful run. Add them to `~/.config/fish/config.fish` manually:
 
 ```fish
-set -x SSL_CERT_FILE "$HOME/corp_cert/combined-ca.pem"
-set -x REQUESTS_CA_BUNDLE "$HOME/corp_cert/combined-ca.pem"
-set -x PIP_CERT "$HOME/corp_cert/combined-ca.pem"
+set -x SSL_CERT_FILE "~/corp_cert/combined-ca.pem"
+set -x REQUESTS_CA_BUNDLE "~/corp_cert/combined-ca.pem"
+set -x PIP_CERT "~/corp_cert/combined-ca.pem"
 ```
 
 Then restart your terminal, or run `source ~/.config/fish/config.fish`.
@@ -81,8 +87,8 @@ Then restart your terminal, or run `source ~/.config/fish/config.fish`.
 **Manually reverting after a successful run:** to undo the changes entirely, remove the source line from your shell profile(s) and delete the generated files. The script prints the exact commands for this at the end of every successful run, in the form:
 
 ```bash
-perl -i -ne 'print unless /corp_cert\/\.corp_ssl_env\.sh/' "$HOME/.zshrc"
-perl -i -ne 'print unless /corp_cert\/\.corp_ssl_env\.sh/' "$HOME/.bash_profile"
+perl -i -ne 'print unless /^# >>> Zscaler combined CA.*>>>$/ .. /^# <<< Zscaler combined CA.*<<<$/' "~/.zshrc"
+perl -i -ne 'print unless /^# >>> Zscaler combined CA.*>>>$/ .. /^# <<< Zscaler combined CA.*<<<$/' "~/.bash_profile"
 ```
 
 (one line per profile file that was actually updated). After running the relevant line(s), also remove the generated directory if you want a completely clean slate:
