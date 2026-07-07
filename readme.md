@@ -9,7 +9,7 @@ If your company uses Zscaler, it intercepts and re-signs HTTPS traffic with its 
 This script fixes that by:
 
 1. Exports the **Zscaler Root CA** certificate from your macOS keychain
-2. Locates all installed Python versions on your machine (including their associated CA bundles). You will be asked to confirm which version will serve as the master export for the next step (note the CA bundle will vary, depending on if python was installed via homebrew [`ssl` module] or manually from python.org [`certifi` module])
+2. Locates all installed Python versions on your machine (including their associated CA bundles). You will be asked to confirm which version will serve as the master export for the next step (_note the CA bundle will vary, depending on if python was installed via homebrew [`ssl` module] or manually from python.org [`certifi` module]_)
 3. Merges the Zscaler certificate (from step-1) into the nominated CA bundle (from step-2).
 4. In your shell startup file(s) (`~/.zshrc` and/or `~/.bash_profile`), points well-known environment variables (`SSL_CERT_FILE` + `REQUESTS_CA_BUNDLE` + `PIP_CERT`) at the merged bundle from step-3.
 
